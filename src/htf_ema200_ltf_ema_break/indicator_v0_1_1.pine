@@ -1,0 +1,196 @@
+//@version=6
+indicator("HTF EMA200 Touch / LTF EMA Break Indicator v0.1.1", overlay=true, max_labels_count=500)
+
+//----------------------------------------------------
+// Inputs
+//----------------------------------------------------
+htfTf = input.timeframe("60", "HTF")
+htfEmaLen = input.int(200, "HTF EMA Length", minval=1)
+
+ltfEmaFastLen = input.int(20, "LTF EMA Fast Length", minval=1)
+ltfEmaSlowLen = input.int(50, "LTF EMA Slow Length", minval=1)
+
+triggerEmaChoice = input.string("20", "Trigger EMA", options=["20", "50"])
+expireBars = input.int(12, "Setup Expire Bars", minval=1)
+
+useConfirmedHtf = input.bool(true, "Use Confirmed HTF EMA")
+waitForBarClose = input.bool(true, "Signal Only On Confirmed Bar")
+
+showHtfEma = input.bool(true, "Show HTF EMA")
+showLtfEmaFast = input.bool(true, "Show LTF EMA Fast")
+showLtfEmaSlow = input.bool(true, "Show LTF EMA Slow")
+
+showTouchMark = input.bool(true, "Show EMA Touch Mark")
+showSetupMark = input.bool(true, "Show Setup Mark")
+showTriggerMark = input.bool(true, "Show Trigger Mark")
+showSetupBg = input.bool(true, "Show Setup Active Background")
+
+//----------------------------------------------------
+// EMA
+//----------------------------------------------------
+htfEmaCurrent = request.security(
+     syminfo.tickerid,
+     htfTf,
+     ta.ema(close, htfEmaLen),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfEmaConfirmed = request.security(
+     syminfo.tickerid,
+     htfTf,
+     ta.ema(close, htfEmaLen)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfEma = useConfirmedHtf ? htfEmaConfirmed : htfEmaCurrent
+
+ltfEmaFast = ta.ema(close, ltfEmaFastLen)
+ltfEmaSlow = ta.ema(close, ltfEmaSlowLen)
+
+triggerEma = triggerEmaChoice == "20" ? ltfEmaFast : ltfEmaSlow
+
+//----------------------------------------------------
+// Touch / Rebound Setup
+//----------------------------------------------------
+confirmedBarOk = waitForBarClose ? barstate.isconfirmed : true
+
+htfEmaTouched = low <= htfEma and high >= htfEma
+
+longTouch = htfEmaTouched and close > htfEma
+shortTouch = htfEmaTouched and close < htfEma
+
+longSetupRaw = longTouch
+shortSetupRaw = shortTouch
+
+longSetup = confirmedBarOk and longSetupRaw
+shortSetup = confirmedBarOk and shortSetupRaw
+
+//----------------------------------------------------
+// Setup State
+//----------------------------------------------------
+var int longSetupBar = na
+var int shortSetupBar = na
+
+if longSetup
+    longSetupBar := bar_index
+    shortSetupBar := na
+
+if shortSetup
+    shortSetupBar := bar_index
+    longSetupBar := na
+
+longBarsFromSetup = not na(longSetupBar) ? bar_index - longSetupBar : na
+shortBarsFromSetup = not na(shortSetupBar) ? bar_index - shortSetupBar : na
+
+longSetupActive = not na(longSetupBar) and longBarsFromSetup <= expireBars
+shortSetupActive = not na(shortSetupBar) and shortBarsFromSetup <= expireBars
+
+longSetupExpired = not na(longSetupBar) and longBarsFromSetup > expireBars
+shortSetupExpired = not na(shortSetupBar) and shortBarsFromSetup > expireBars
+
+if longSetupExpired
+    longSetupBar := na
+
+if shortSetupExpired
+    shortSetupBar := na
+
+//----------------------------------------------------
+// Trigger
+//----------------------------------------------------
+longTriggerRaw = ta.crossover(close, triggerEma)
+shortTriggerRaw = ta.crossunder(close, triggerEma)
+
+longTrigger = confirmedBarOk and longSetupActive and longTriggerRaw
+shortTrigger = confirmedBarOk and shortSetupActive and shortTriggerRaw
+
+if longTrigger
+    longSetupBar := na
+
+if shortTrigger
+    shortSetupBar := na
+
+//----------------------------------------------------
+// Plot EMA
+//----------------------------------------------------
+plot(showHtfEma ? htfEma : na, title="HTF EMA", linewidth=2)
+plot(showLtfEmaFast ? ltfEmaFast : na, title="LTF EMA Fast", linewidth=1)
+plot(showLtfEmaSlow ? ltfEmaSlow : na, title="LTF EMA Slow", linewidth=1)
+
+//----------------------------------------------------
+// Plot Touch
+//----------------------------------------------------
+plotshape(
+     showTouchMark and confirmedBarOk and longTouch,
+     title="Long Touch Rebound",
+     style=shape.circle,
+     location=location.belowbar,
+     size=size.tiny,
+     text="LT"
+)
+
+plotshape(
+     showTouchMark and confirmedBarOk and shortTouch,
+     title="Short Touch Rebound",
+     style=shape.circle,
+     location=location.abovebar,
+     size=size.tiny,
+     text="ST"
+)
+
+//----------------------------------------------------
+// Plot Setup
+//----------------------------------------------------
+plotshape(
+     showSetupMark and longSetup,
+     title="Long Setup",
+     style=shape.triangleup,
+     location=location.belowbar,
+     size=size.small,
+     text="LS"
+)
+
+plotshape(
+     showSetupMark and shortSetup,
+     title="Short Setup",
+     style=shape.triangledown,
+     location=location.abovebar,
+     size=size.small,
+     text="SS"
+)
+
+//----------------------------------------------------
+// Plot Trigger
+//----------------------------------------------------
+plotshape(
+     showTriggerMark and longTrigger,
+     title="Long Trigger",
+     style=shape.labelup,
+     location=location.belowbar,
+     size=size.small,
+     text="LONG"
+)
+
+plotshape(
+     showTriggerMark and shortTrigger,
+     title="Short Trigger",
+     style=shape.labeldown,
+     location=location.abovebar,
+     size=size.small,
+     text="SHORT"
+)
+
+//----------------------------------------------------
+// Setup Active Background
+//----------------------------------------------------
+bgcolor(showSetupBg and longSetupActive ? color.new(color.green, 88) : na)
+bgcolor(showSetupBg and shortSetupActive ? color.new(color.red, 88) : na)
+
+//----------------------------------------------------
+// Alerts
+//----------------------------------------------------
+alertcondition(longSetup, title="Long Setup", message="Long setup detected: HTF EMA touch and rebound")
+alertcondition(shortSetup, title="Short Setup", message="Short setup detected: HTF EMA touch and rebound")
+alertcondition(longTrigger, title="Long Trigger", message="Long trigger detected: LTF EMA breakout after HTF EMA setup")
+alertcondition(shortTrigger, title="Short Trigger", message="Short trigger detected: LTF EMA breakout after HTF EMA setup")
