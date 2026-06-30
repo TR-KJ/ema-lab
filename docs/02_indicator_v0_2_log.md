@@ -152,3 +152,14 @@ v0.2をチャートで確認する。
 - EMA20/50並びフィルタ
 - HTF EMA200傾きフィルタ
 - Strategy v1.0化
+
+## v0.2
+
+
+v0.2のApproach Direction方式：採用
+
+2枚目の理想形：再現OK
+
+赤矢印：Trigger位置フィルタで修正
+
+黄色矢印：Cooldownで軽減、必要なら次にHTF EMA傾きフィルタ
