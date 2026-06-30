@@ -163,3 +163,23 @@ v0.2のApproach Direction方式：採用
 赤矢印：Trigger位置フィルタで修正
 
 黄色矢印：Cooldownで軽減、必要なら次にHTF EMA傾きフィルタ
+
+## v0.2.1
+
+v0.1
+タッチ判定が甘く、LT大量発生
+
+v0.1.1
+実タッチ判定に修正
+ただし、接触足終値でLong/Shortを決めるため裁量とズレる場面あり
+
+v0.2
+Approach Direction方式に変更
+上からEMA200へ接触 = Long Setup
+下からEMA200へ接触 = Short Setup
+
+v0.2.1
+Trigger位置フィルタ追加
+LongはHTF EMA200より上のみ
+ShortはHTF EMA200より下のみ
+Trigger後Cooldown追加
