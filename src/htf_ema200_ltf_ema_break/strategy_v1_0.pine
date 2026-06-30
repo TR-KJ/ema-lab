@@ -1,0 +1,277 @@
+//@version=6
+strategy("HTF EMA200 Touch / LTF EMA Break Strategy v1.0", overlay=true, initial_capital=1000000, currency=currency.JPY, default_qty_type=strategy.percent_of_equity, default_qty_value=2, commission_type=strategy.commission.percent, commission_value=0.04, slippage=2, pyramiding=0, process_orders_on_close=false, calc_on_every_tick=false, max_labels_count=500)
+
+//----------------------------------------------------
+// Inputs
+//----------------------------------------------------
+htfTf = input.timeframe("60", "HTF")
+htfEmaLen = input.int(200, "HTF EMA Length", minval=1)
+
+ltfEmaFastLen = input.int(20, "LTF EMA Fast Length", minval=1)
+ltfEmaSlowLen = input.int(50, "LTF EMA Slow Length", minval=1)
+
+triggerEmaChoice = input.string("20", "Trigger EMA", options=["20", "50"])
+expireBars = input.int(12, "Setup Expire Bars", minval=1)
+cooldownBars = input.int(12, "Cooldown Bars After Trigger", minval=0)
+
+rr = input.float(1.5, "RR", minval=0.1, step=0.1)
+
+useConfirmedHtf = input.bool(true, "Use Confirmed HTF EMA")
+waitForBarClose = input.bool(true, "Signal Only On Confirmed Bar")
+
+showHtfEma = input.bool(true, "Show HTF EMA")
+showLtfEmaFast = input.bool(true, "Show LTF EMA Fast")
+showLtfEmaSlow = input.bool(true, "Show LTF EMA Slow")
+
+showTouchMark = input.bool(true, "Show EMA Touch Mark")
+showSetupMark = input.bool(true, "Show Setup Mark")
+showTriggerMark = input.bool(true, "Show Trigger Mark")
+showSetupBg = input.bool(true, "Show Setup Active Background")
+showCooldownBg = input.bool(false, "Show Cooldown Background")
+
+//----------------------------------------------------
+// EMA
+//----------------------------------------------------
+htfEmaCurrent = request.security(
+     syminfo.tickerid,
+     htfTf,
+     ta.ema(close, htfEmaLen),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfEmaConfirmed = request.security(
+     syminfo.tickerid,
+     htfTf,
+     ta.ema(close, htfEmaLen)[1],
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfEma = useConfirmedHtf ? htfEmaConfirmed : htfEmaCurrent
+
+ltfEmaFast = ta.ema(close, ltfEmaFastLen)
+ltfEmaSlow = ta.ema(close, ltfEmaSlowLen)
+
+triggerEma = triggerEmaChoice == "20" ? ltfEmaFast : ltfEmaSlow
+
+//----------------------------------------------------
+// Basic Conditions
+//----------------------------------------------------
+confirmedBarOk = waitForBarClose ? barstate.isconfirmed : true
+
+htfEmaTouched = low <= htfEma and high >= htfEma
+
+approachFromAbove = close[1] > htfEma[1]
+approachFromBelow = close[1] < htfEma[1]
+
+isFlat = strategy.position_size == 0
+
+//----------------------------------------------------
+// Setup / Cooldown State
+//----------------------------------------------------
+// setupDir:
+//  0 = no setup
+//  1 = long setup active
+// -1 = short setup active
+var int setupDir = 0
+var int setupBar = na
+var int cooldownBar = na
+
+var float setupLow = na
+var float setupHigh = na
+
+barsFromCooldown = not na(cooldownBar) ? bar_index - cooldownBar : na
+cooldownActive = not na(cooldownBar) and barsFromCooldown <= cooldownBars
+cooldownExpired = not na(cooldownBar) and barsFromCooldown > cooldownBars
+
+if cooldownExpired
+    cooldownBar := na
+
+barsFromSetupPre = setupDir != 0 and not na(setupBar) ? bar_index - setupBar : na
+setupExpiredPre = setupDir != 0 and not na(barsFromSetupPre) and barsFromSetupPre > expireBars
+
+if setupExpiredPre
+    setupDir := 0
+    setupBar := na
+    setupLow := na
+    setupHigh := na
+
+noSetupActive = setupDir == 0
+setupAllowed = noSetupActive and not cooldownActive and isFlat
+
+//----------------------------------------------------
+// Setup
+//----------------------------------------------------
+longSetupRaw = setupAllowed and htfEmaTouched and approachFromAbove
+shortSetupRaw = setupAllowed and htfEmaTouched and approachFromBelow
+
+longSetup = confirmedBarOk and longSetupRaw
+shortSetup = confirmedBarOk and shortSetupRaw
+
+if longSetup
+    setupDir := 1
+    setupBar := bar_index
+    setupLow := low
+    setupHigh := high
+
+if shortSetup
+    setupDir := -1
+    setupBar := bar_index
+    setupLow := low
+    setupHigh := high
+
+if setupDir != 0
+    setupLow := na(setupLow) ? low : math.min(setupLow, low)
+    setupHigh := na(setupHigh) ? high : math.max(setupHigh, high)
+
+barsFromSetup = setupDir != 0 and not na(setupBar) ? bar_index - setupBar : na
+setupExpired = setupDir != 0 and not na(barsFromSetup) and barsFromSetup > expireBars
+
+if setupExpired
+    setupDir := 0
+    setupBar := na
+    setupLow := na
+    setupHigh := na
+
+longSetupActive = setupDir == 1
+shortSetupActive = setupDir == -1
+
+//----------------------------------------------------
+// Trigger
+//----------------------------------------------------
+longTriggerRaw = ta.crossover(close, triggerEma)
+shortTriggerRaw = ta.crossunder(close, triggerEma)
+
+longTriggerPositionOk = close > htfEma
+shortTriggerPositionOk = close < htfEma
+
+longTrigger = confirmedBarOk and isFlat and longSetupActive and longTriggerRaw and longTriggerPositionOk
+shortTrigger = confirmedBarOk and isFlat and shortSetupActive and shortTriggerRaw and shortTriggerPositionOk
+
+//----------------------------------------------------
+// SL / TP
+//----------------------------------------------------
+longStop = setupLow
+shortStop = setupHigh
+
+longRisk = not na(longStop) ? close - longStop : na
+shortRisk = not na(shortStop) ? shortStop - close : na
+
+longRiskOk = not na(longRisk) and longRisk > syminfo.mintick
+shortRiskOk = not na(shortRisk) and shortRisk > syminfo.mintick
+
+longTarget = longRiskOk ? close + longRisk * rr : na
+shortTarget = shortRiskOk ? close - shortRisk * rr : na
+
+//----------------------------------------------------
+// Orders
+//----------------------------------------------------
+if longTrigger and longRiskOk
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longStop, limit=longTarget)
+    setupDir := 0
+    setupBar := na
+    setupLow := na
+    setupHigh := na
+    cooldownBar := bar_index
+
+if shortTrigger and shortRiskOk
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortStop, limit=shortTarget)
+    setupDir := 0
+    setupBar := na
+    setupLow := na
+    setupHigh := na
+    cooldownBar := bar_index
+
+//----------------------------------------------------
+// Plot EMA
+//----------------------------------------------------
+plot(showHtfEma ? htfEma : na, title="HTF EMA", linewidth=2)
+plot(showLtfEmaFast ? ltfEmaFast : na, title="LTF EMA Fast", linewidth=1)
+plot(showLtfEmaSlow ? ltfEmaSlow : na, title="LTF EMA Slow", linewidth=1)
+
+//----------------------------------------------------
+// Plot Touch
+//----------------------------------------------------
+plotshape(
+     showTouchMark and confirmedBarOk and htfEmaTouched and approachFromAbove and setupAllowed,
+     title="Long Touch Approach",
+     style=shape.circle,
+     location=location.belowbar,
+     size=size.tiny,
+     text="LT"
+)
+
+plotshape(
+     showTouchMark and confirmedBarOk and htfEmaTouched and approachFromBelow and setupAllowed,
+     title="Short Touch Approach",
+     style=shape.circle,
+     location=location.abovebar,
+     size=size.tiny,
+     text="ST"
+)
+
+//----------------------------------------------------
+// Plot Setup
+//----------------------------------------------------
+plotshape(
+     showSetupMark and longSetup,
+     title="Long Setup",
+     style=shape.triangleup,
+     location=location.belowbar,
+     size=size.small,
+     text="LS"
+)
+
+plotshape(
+     showSetupMark and shortSetup,
+     title="Short Setup",
+     style=shape.triangledown,
+     location=location.abovebar,
+     size=size.small,
+     text="SS"
+)
+
+//----------------------------------------------------
+// Plot Trigger
+//----------------------------------------------------
+plotshape(
+     showTriggerMark and longTrigger,
+     title="Long Trigger",
+     style=shape.labelup,
+     location=location.belowbar,
+     size=size.small,
+     text="LONG"
+)
+
+plotshape(
+     showTriggerMark and shortTrigger,
+     title="Short Trigger",
+     style=shape.labeldown,
+     location=location.abovebar,
+     size=size.small,
+     text="SHORT"
+)
+
+//----------------------------------------------------
+// Plot SL / TP
+//----------------------------------------------------
+plot(longSetupActive ? setupLow : na, title="Long Setup Low", style=plot.style_linebr)
+plot(shortSetupActive ? setupHigh : na, title="Short Setup High", style=plot.style_linebr)
+
+//----------------------------------------------------
+// Background
+//----------------------------------------------------
+bgcolor(showSetupBg and longSetupActive ? color.new(color.green, 88) : na)
+bgcolor(showSetupBg and shortSetupActive ? color.new(color.red, 88) : na)
+bgcolor(showCooldownBg and cooldownActive ? color.new(color.gray, 88) : na)
+
+//----------------------------------------------------
+// Alerts
+//----------------------------------------------------
+alertcondition(longSetup, title="Long Setup", message="Long setup detected: HTF EMA touch from above")
+alertcondition(shortSetup, title="Short Setup", message="Short setup detected: HTF EMA touch from below")
+alertcondition(longTrigger, title="Long Trigger", message="Long trigger detected above HTF EMA after long setup")
+alertcondition(shortTrigger, title="Short Trigger", message="Short trigger detected below HTF EMA after short setup")
